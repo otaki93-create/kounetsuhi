@@ -84,7 +84,7 @@ export default function KonetsuhiApp() {
     const total = EXPENSE_ITEMS.reduce((s, it) => s + (v[it.id] ?? 0), 0)
     const half = EXPENSE_ITEMS.reduce((s, it) => {
       if (it.excludeFromHalf) return s
-      return s + Math.round((v[it.id] ?? 0) / 2)
+      return s + Math.floor((v[it.id] ?? 0) / 2 / 1000) * 1000
     }, 0)
     return { total, half }
   }
