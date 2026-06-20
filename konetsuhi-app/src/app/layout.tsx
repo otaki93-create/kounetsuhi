@@ -4,6 +4,7 @@ import './globals.css'
 export const metadata: Metadata = {
   title: '光熱費管理',
   description: '月別光熱費リアルタイム共有アプリ',
+  manifest: '/manifest.json',
 }
 
 export const viewport: Viewport = {
