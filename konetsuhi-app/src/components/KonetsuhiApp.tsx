@@ -62,8 +62,10 @@ function ItemRow({
       />
       <span className="w-20 text-right text-xs text-gray-500 shrink-0">
         {excludeFromHalf
-          ? <span className="text-gray-300">—</span>
-          : yen(Math.round(value / 2))}
+  ? <span className="text-gray-300">—</span>
+  : item.fullAmountForParent
+  ? yen(value)
+  : yen(Math.round(value / 2))}
       </span>
     </div>
   )
