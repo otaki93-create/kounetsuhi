@@ -7,6 +7,7 @@ export interface ExpenseItem {
   label: string
   note: string
   category: 'monthly' | 'annual'
+  excludeFromHalf?: boolean  // 子世帯持ちなど負担分に含めない項目
 }
 
 export interface MonthlyRecord {
