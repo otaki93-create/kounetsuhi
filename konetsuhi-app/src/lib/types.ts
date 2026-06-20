@@ -8,6 +8,7 @@ export interface ExpenseItem {
   note: string
   category: 'monthly' | 'annual'
   excludeFromHalf?: boolean
+  fullAmountForParent?: boolean
 }
 
 export interface HistoryEntry {
