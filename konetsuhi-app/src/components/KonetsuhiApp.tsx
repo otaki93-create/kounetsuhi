@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { MONTHLY_ITEMS, ANNUAL_ITEMS, EXPENSE_ITEMS } from '@/lib/items'
-import { ExpenseItem, MonthlyRecord } from '@/lib/types'
+import { ExpenseItem, HistoryEntry, MonthlyRecord } from '@/lib/types'
 
 const TABLE = 'konetsuhi_records'
 
@@ -15,6 +15,10 @@ function monthKey(d: Date) {
 }
 function yen(n: number) {
   return n > 0 ? `¥${n.toLocaleString()}` : '—'
+}
+function fmtDateTime(iso: string) {
+  const d = new Date(iso)
+  return `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`
 }
 
 function ItemRow({
@@ -29,12 +33,8 @@ function ItemRow({
   const [focused, setFocused] = useState(false)
 
   useEffect(() => {
-    if (!focused) {
-      setLocalVal(value === 0 ? '' : String(value))
-    }
+    if (!focused) setLocalVal(value === 0 ? '' : String(value))
   }, [value, focused])
-
-  const halfVal = excludeFromHalf ? null : Math.round(value / 2)
 
   return (
     <div className="flex items-center gap-2 bg-white rounded-xl px-3 py-2.5 mb-2 border border-gray-100">
@@ -61,7 +61,9 @@ function ItemRow({
         className="w-24 text-right text-sm bg-gray-50 rounded-lg px-2 py-1.5 border border-gray-200 focus:outline-none focus:border-emerald-400 focus:bg-white transition"
       />
       <span className="w-20 text-right text-xs text-gray-500 shrink-0">
-        {excludeFromHalf ? <span className="text-gray-300">—</span> : yen(halfVal ?? 0)}
+        {excludeFromHalf
+          ? <span className="text-gray-300">—</span>
+          : yen(Math.round(value / 2))}
       </span>
     </div>
   )
@@ -71,27 +73,41 @@ export default function KonetsuhiApp() {
   const [date, setDate] = useState(new Date())
   const [values, setValues] = useState<Record<string, number>>({})
   const [memo, setMemo] = useState('')
+  const [status, setStatus] = useState<'draft' | 'confirmed' | 'modified'>('draft')
+  const [history, setHistory] = useState<HistoryEntry[]>([])
   const [syncStatus, setSyncStatus] = useState<'synced' | 'saving' | 'error'>('synced')
+  const [showHistory, setShowHistory] = useState(false)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const recordId = useRef<string | null>(null)
+
+  const calcTotals = (v: Record<string, number>) => {
+    const total = EXPENSE_ITEMS.reduce((s, it) => s + (v[it.id] ?? 0), 0)
+    const half = EXPENSE_ITEMS.reduce((s, it) => {
+      if (it.excludeFromHalf) return s
+      return s + Math.round((v[it.id] ?? 0) / 2)
+    }, 0)
+    return { total, half }
+  }
+
+  const { total, half } = calcTotals(values)
 
   const load = useCallback(async (d: Date) => {
     const key = monthKey(d)
     const { data, error } = await supabase
-      .from(TABLE)
-      .select('*')
-      .eq('month_key', key)
-      .maybeSingle()
-
+      .from(TABLE).select('*').eq('month_key', key).maybeSingle()
     if (error) { setSyncStatus('error'); return }
     if (data) {
       recordId.current = data.id
       setValues(data.values ?? {})
       setMemo(data.memo ?? '')
+      setStatus(data.status ?? 'draft')
+      setHistory(data.history ?? [])
     } else {
       recordId.current = null
       setValues({})
       setMemo('')
+      setStatus('draft')
+      setHistory([])
     }
     setSyncStatus('synced')
   }, [])
@@ -99,31 +115,34 @@ export default function KonetsuhiApp() {
   useEffect(() => { load(date) }, [date, load])
 
   useEffect(() => {
-    const channel = supabase
-      .channel('konetsuhi-realtime')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: TABLE },
-        (payload) => {
-          const row = (payload.new ?? payload.old) as MonthlyRecord
-          if (row?.month_key === monthKey(date)) {
-            setValues(row.values ?? {})
-            setMemo(row.memo ?? '')
-            setSyncStatus('synced')
-          }
+    const channel = supabase.channel('konetsuhi-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: TABLE }, (payload) => {
+        const row = (payload.new ?? payload.old) as MonthlyRecord
+        if (row?.month_key === monthKey(date)) {
+          setValues(row.values ?? {})
+          setMemo(row.memo ?? '')
+          setStatus(row.status ?? 'draft')
+          setHistory(row.history ?? [])
+          setSyncStatus('synced')
         }
-      )
-      .subscribe()
+      }).subscribe()
     return () => { supabase.removeChannel(channel) }
   }, [date])
 
-  const save = useCallback(
-    (newValues: Record<string, number>, newMemo: string) => {
+  const savePayload = useCallback(
+    (newValues: Record<string, number>, newMemo: string, newStatus: string, newHistory: HistoryEntry[]) => {
       if (saveTimer.current) clearTimeout(saveTimer.current)
       setSyncStatus('saving')
       saveTimer.current = setTimeout(async () => {
         const key = monthKey(date)
-        const payload = { month_key: key, values: newValues, memo: newMemo, updated_at: new Date().toISOString() }
+        const payload = {
+          month_key: key,
+          values: newValues,
+          memo: newMemo,
+          status: newStatus,
+          history: newHistory,
+          updated_at: new Date().toISOString()
+        }
         let error
         if (recordId.current) {
           ;({ error } = await supabase.from(TABLE).update(payload).eq('id', recordId.current))
@@ -142,21 +161,45 @@ export default function KonetsuhiApp() {
     const n = raw === '' ? 0 : Number(raw)
     const next = { ...values, [id]: n }
     setValues(next)
-    save(next, memo)
+    // 確定済みなら「修正あり」に変更して履歴追加
+    if (status === 'confirmed') {
+      const { total: t, half: h } = calcTotals(next)
+      const entry: HistoryEntry = { at: new Date().toISOString(), type: 'modified', total: t, half: h }
+      const newHistory = [...history, entry]
+      setStatus('modified')
+      setHistory(newHistory)
+      savePayload(next, memo, 'modified', newHistory)
+    } else {
+      savePayload(next, memo, status, history)
+    }
   }
 
   function handleMemo(v: string) {
     setMemo(v)
-    save(values, v)
+    savePayload(values, v, status, history)
   }
 
-  // 合計：全項目
-  const total = EXPENSE_ITEMS.reduce((s, it) => s + (values[it.id] ?? 0), 0)
-  // 負担合計：excludeFromHalf でない項目のみ半額
-  const half = EXPENSE_ITEMS.reduce((s, it) => {
-    if (it.excludeFromHalf) return s
-    return s + Math.round((values[it.id] ?? 0) / 2)
-  }, 0)
+  function handleConfirm() {
+    const entry: HistoryEntry = { at: new Date().toISOString(), type: 'confirmed', total, half }
+    const newHistory = [...history, entry]
+    setStatus('confirmed')
+    setHistory(newHistory)
+    savePayload(values, memo, 'confirmed', newHistory)
+  }
+
+  const statusBadge = () => {
+    if (status === 'confirmed') return (
+      <span className="inline-flex items-center gap-1 bg-emerald-100 text-emerald-700 text-xs font-medium px-2 py-0.5 rounded-full">
+        ✓ 確定
+      </span>
+    )
+    if (status === 'modified') return (
+      <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-700 text-xs font-medium px-2 py-0.5 rounded-full">
+        ✎ 修正あり
+      </span>
+    )
+    return null
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -187,16 +230,64 @@ export default function KonetsuhiApp() {
           </div>
         </div>
 
-        {/* サマリーカード（項目の上） */}
+        {/* サマリーカード */}
         <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
-          <div className="flex justify-between items-baseline mb-2">
-            <span className="text-sm text-gray-500">合計</span>
+          <div className="flex justify-between items-center mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-500">合計</span>
+              {statusBadge()}
+            </div>
             <span className="text-base font-medium text-gray-800">{yen(total)}</span>
           </div>
-          <div className="flex justify-between items-baseline pt-3 border-t border-gray-100">
+          <div className="flex justify-between items-baseline pt-3 border-t border-gray-100 mb-3">
             <span className="text-sm text-gray-500">親世帯分（半額）</span>
             <span className="text-2xl font-semibold text-emerald-600">{yen(half)}</span>
           </div>
+
+          {/* 確定ボタン */}
+          <div className="flex gap-2">
+            <button
+              onClick={handleConfirm}
+              disabled={total === 0}
+              className="flex-1 py-2 rounded-xl text-sm font-medium bg-emerald-500 text-white active:scale-95 transition disabled:opacity-30"
+            >
+              {status === 'confirmed' ? '再確定する' : status === 'modified' ? '修正を確定する' : '金額を確定する'}
+            </button>
+            {history.length > 0 && (
+              <button
+                onClick={() => setShowHistory(v => !v)}
+                className="px-3 py-2 rounded-xl text-sm border border-gray-200 bg-white text-gray-500 active:scale-95 transition"
+              >
+                履歴 {history.length}
+              </button>
+            )}
+          </div>
+
+          {/* 修正ありの警告 */}
+          {status === 'modified' && (
+            <p className="mt-2 text-xs text-amber-600 bg-amber-50 rounded-lg px-3 py-2">
+              確定後に金額が変更されました。確認の上、再確定してください。
+            </p>
+          )}
+
+          {/* 履歴パネル */}
+          {showHistory && history.length > 0 && (
+            <div className="mt-3 border-t border-gray-100 pt-3 space-y-2">
+              <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-1">確定・修正履歴</p>
+              {[...history].reverse().map((h, i) => (
+                <div key={i} className="flex items-start gap-2 text-xs">
+                  <span className={`mt-0.5 shrink-0 inline-block w-1.5 h-1.5 rounded-full ${h.type === 'confirmed' ? 'bg-emerald-500' : 'bg-amber-400'}`} />
+                  <div className="flex-1">
+                    <span className={h.type === 'confirmed' ? 'text-emerald-700' : 'text-amber-600'}>
+                      {h.type === 'confirmed' ? '確定' : '修正あり'}
+                    </span>
+                    <span className="text-gray-400 ml-1">{fmtDateTime(h.at)}</span>
+                    <div className="text-gray-500">合計 {yen(h.total)} / 親世帯 {yen(h.half)}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* 列ラベル */}
