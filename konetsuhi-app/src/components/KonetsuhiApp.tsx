@@ -194,7 +194,7 @@ export default function KonetsuhiApp() {
             <span className="text-base font-medium text-gray-800">{yen(total)}</span>
           </div>
           <div className="flex justify-between items-baseline pt-3 border-t border-gray-100">
-            <span className="text-sm text-gray-500">負担合計（半額）</span>
+            <span className="text-sm text-gray-500">親世帯分（半額）</span>
             <span className="text-2xl font-semibold text-emerald-600">{yen(half)}</span>
           </div>
         </div>
@@ -203,7 +203,7 @@ export default function KonetsuhiApp() {
         <div className="flex items-center gap-2 px-3 mb-2">
           <span className="flex-1 text-xs text-gray-400">項目</span>
           <span className="w-24 text-right text-xs text-gray-400">総額 (円)</span>
-          <span className="w-20 text-right text-xs text-gray-400">負担分</span>
+          <span className="w-20 text-right text-xs text-gray-400">親世帯</span>
         </div>
 
         {/* 毎月の費用 */}
