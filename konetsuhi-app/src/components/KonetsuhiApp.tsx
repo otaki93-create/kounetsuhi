@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
 import { MONTHLY_ITEMS, ANNUAL_ITEMS, EXPENSE_ITEMS } from '@/lib/items'
-import { MonthlyRecord } from '@/lib/types'
+import { ExpenseItem, MonthlyRecord } from '@/lib/types'
 
 const TABLE = 'konetsuhi_records'
 
@@ -18,11 +18,13 @@ function yen(n: number) {
 }
 
 function ItemRow({
-  id, label, note, value, onChange
+  item, value, onChange
 }: {
-  id: string; label: string; note: string
-  value: number; onChange: (id: string, raw: string) => void
+  item: ExpenseItem
+  value: number
+  onChange: (id: string, raw: string) => void
 }) {
+  const { id, label, note, excludeFromHalf } = item
   const [localVal, setLocalVal] = useState(value === 0 ? '' : String(value))
   const [focused, setFocused] = useState(false)
 
@@ -31,6 +33,8 @@ function ItemRow({
       setLocalVal(value === 0 ? '' : String(value))
     }
   }, [value, focused])
+
+  const halfVal = excludeFromHalf ? null : Math.round(value / 2)
 
   return (
     <div className="flex items-center gap-2 bg-white rounded-xl px-3 py-2.5 mb-2 border border-gray-100">
@@ -56,7 +60,9 @@ function ItemRow({
         placeholder="0"
         className="w-24 text-right text-sm bg-gray-50 rounded-lg px-2 py-1.5 border border-gray-200 focus:outline-none focus:border-emerald-400 focus:bg-white transition"
       />
-      <span className="w-20 text-right text-xs text-gray-500 shrink-0">{yen(Math.round(value / 2))}</span>
+      <span className="w-20 text-right text-xs text-gray-500 shrink-0">
+        {excludeFromHalf ? <span className="text-gray-300">—</span> : yen(halfVal ?? 0)}
+      </span>
     </div>
   )
 }
@@ -144,13 +150,19 @@ export default function KonetsuhiApp() {
     save(values, v)
   }
 
+  // 合計：全項目
   const total = EXPENSE_ITEMS.reduce((s, it) => s + (values[it.id] ?? 0), 0)
-  const half  = Math.round(total / 2)
+  // 負担合計：excludeFromHalf でない項目のみ半額
+  const half = EXPENSE_ITEMS.reduce((s, it) => {
+    if (it.excludeFromHalf) return s
+    return s + Math.round((values[it.id] ?? 0) / 2)
+  }, 0)
 
   return (
     <div className="min-h-screen bg-gray-50">
       <div className="max-w-md mx-auto px-3 pb-16">
 
+        {/* ヘッダー */}
         <div className="pt-10 pb-4 border-b border-gray-200 mb-4">
           <div className="flex items-center justify-between mb-3">
             <h1 className="text-lg font-semibold text-gray-900">⚡ 光熱費管理</h1>
@@ -175,23 +187,8 @@ export default function KonetsuhiApp() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 px-3 mb-2">
-          <span className="flex-1 text-xs text-gray-400">項目</span>
-          <span className="w-24 text-right text-xs text-gray-400">総額 (円)</span>
-          <span className="w-20 text-right text-xs text-gray-400">負担分</span>
-        </div>
-
-        <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">毎月の費用</p>
-        {MONTHLY_ITEMS.map(it => (
-          <ItemRow key={it.id} {...it} value={values[it.id] ?? 0} onChange={handleValue} />
-        ))}
-
-        <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mt-4 mb-2">年払い・その他</p>
-        {ANNUAL_ITEMS.map(it => (
-          <ItemRow key={it.id} {...it} value={values[it.id] ?? 0} onChange={handleValue} />
-        ))}
-
-        <div className="bg-white rounded-2xl border border-gray-100 p-4 mt-4">
+        {/* サマリーカード（項目の上） */}
+        <div className="bg-white rounded-2xl border border-gray-100 p-4 mb-4">
           <div className="flex justify-between items-baseline mb-2">
             <span className="text-sm text-gray-500">合計</span>
             <span className="text-base font-medium text-gray-800">{yen(total)}</span>
@@ -202,6 +199,26 @@ export default function KonetsuhiApp() {
           </div>
         </div>
 
+        {/* 列ラベル */}
+        <div className="flex items-center gap-2 px-3 mb-2">
+          <span className="flex-1 text-xs text-gray-400">項目</span>
+          <span className="w-24 text-right text-xs text-gray-400">総額 (円)</span>
+          <span className="w-20 text-right text-xs text-gray-400">負担分</span>
+        </div>
+
+        {/* 毎月の費用 */}
+        <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">毎月の費用</p>
+        {MONTHLY_ITEMS.map(it => (
+          <ItemRow key={it.id} item={it} value={values[it.id] ?? 0} onChange={handleValue} />
+        ))}
+
+        {/* 年払い・その他 */}
+        <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mt-4 mb-2">年払い・その他</p>
+        {ANNUAL_ITEMS.map(it => (
+          <ItemRow key={it.id} item={it} value={values[it.id] ?? 0} onChange={handleValue} />
+        ))}
+
+        {/* メモ */}
         <div className="mt-4">
           <p className="text-xs font-medium text-gray-400 uppercase tracking-wide mb-2">メモ</p>
           <textarea
