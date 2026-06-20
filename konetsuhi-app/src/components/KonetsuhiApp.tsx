@@ -83,13 +83,15 @@ export default function KonetsuhiApp() {
   const recordId = useRef<string | null>(null)
 
   const calcTotals = (v: Record<string, number>) => {
-    const total = EXPENSE_ITEMS.reduce((s, it) => s + (v[it.id] ?? 0), 0)
-    const half = EXPENSE_ITEMS.reduce((s, it) => {
-      if (it.excludeFromHalf) return s
-      return s + Math.floor((v[it.id] ?? 0) / 2 / 1000) * 1000
-    }, 0)
-    return { total, half }
-  }
+  const total = EXPENSE_ITEMS.reduce((s, it) => s + (v[it.id] ?? 0), 0)
+  const halfRaw = EXPENSE_ITEMS.reduce((s, it) => {
+    if (it.excludeFromHalf) return s
+    if (it.fullAmountForParent) return s + (v[it.id] ?? 0)
+    return s + (v[it.id] ?? 0) / 2
+  }, 0)
+  const half = Math.floor(halfRaw / 1000) * 1000
+  return { total, half }
+}
 
   const { total, half } = calcTotals(values)
 
